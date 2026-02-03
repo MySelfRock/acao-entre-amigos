@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  # Database - MySQL
+  mysql:
+    image: mysql:8.0
+    container_name: bingo_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
+      MYSQL_DATABASE: ${DB_DATABASE:-bingo_db}
+      MYSQL_USER: ${DB_USERNAME:-bingo_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-bingo_password}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 5s
+      retries: 5
+    networks:
+      - bingo_network
+
+  # Redis - Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: bingo_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      timeout: 3s
+      retries: 5
+    networks:
+      - bingo_network
+
+  # Laravel Backend
+  laravel:
+    build:
+      context: ./backend-laravel
+      dockerfile: Dockerfile
+    container_name: bingo_laravel
+    environment:
+      APP_NAME: "Bingo System"
+      APP_ENV: ${APP_ENV:-local}
+      APP_DEBUG: ${APP_DEBUG:-true}
+      APP_KEY: ${APP_KEY:-base64:}
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: ${DB_DATABASE:-bingo_db}
+      DB_USERNAME: ${DB_USERNAME:-bingo_user}
+      DB_PASSWORD: ${DB_PASSWORD:-bingo_password}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      GENERATOR_API_URL: http://python:8000
+      GENERATOR_API_KEY: ${GENERATOR_API_KEY:-dev-api-key}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend-laravel:/app
+      - laravel_storage:/app/storage
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "php artisan migrate --force &&
+             php artisan queue:work redis --tries=3"
+    networks:
+      - bingo_network
+
+  # Python Generator Service
+  python:
+    build:
+      context: ./generator-python
+      dockerfile: Dockerfile
+    container_name: bingo_python
+    environment:
+      PYTHONUNBUFFERED: 1
+      API_KEY: ${GENERATOR_API_KEY:-dev-api-key}
+      LARAVEL_API_URL: http://laravel:8000
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./generator-python:/app
+      - python_output:/app/output
+    depends_on:
+      - laravel
+    networks:
+      - bingo_network
+
+volumes:
+  mysql_data:
+  redis_data:
+  laravel_storage:
+  python_output:
+
+networks:
+  bingo_network:
+    driver: bridge
