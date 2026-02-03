@@ -4,9 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Models\Event;
 use App\Models\Card;
+use App\Models\CardLayout;
 use App\Jobs\GenerateCardsJob;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Http;
 
 class CardController extends Controller
 {
@@ -117,6 +119,135 @@ class CardController extends Controller
                     : 0,
             ],
         ]);
+    }
+
+    /**
+     * Generate PDF files for cards
+     */
+    public function generatePDFs(Event $event, Request $request): JsonResponse
+    {
+        // Authorization
+        if (!$request->user()->canManageEvents() || $event->created_by !== $request->user()->id) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        // Validation
+        $validated = $request->validate([
+            'card_ids' => 'nullable|array',
+            'card_ids.*' => 'uuid|exists:cards,id',
+            'limit' => 'nullable|integer|min:1|max:10000',
+            'layout' => 'nullable|string',
+        ]);
+
+        try {
+            // Get cards (all or specific IDs)
+            $query = $event->cards()->with('subcards.numbers');
+
+            if ($validated['card_ids'] ?? null) {
+                $query->whereIn('id', $validated['card_ids']);
+            } else {
+                $limit = $validated['limit'] ?? 100;
+                $query->limit($limit);
+            }
+
+            $cards = $query->get();
+
+            if ($cards->isEmpty()) {
+                return response()->json(['message' => 'No cards found'], 404);
+            }
+
+            // Get layout configuration
+            $layout = $validated['layout'] ?? 'default';
+            $layoutModel = $event->cardLayout ??
+                CardLayout::where('is_default', true)->first();
+
+            // Build card data for PDF generation
+            $cardsData = $cards->map(function ($card) {
+                return [
+                    'card_id' => $card->id,
+                    'card_index' => $card->card_index,
+                    'qr_code' => $card->qr_code,
+                    'event_id' => $card->event_id,
+                    'subcards' => $card->subcards->map(function ($subcard) {
+                        return [
+                            'round' => $subcard->round_number,
+                            'hash' => $subcard->hash,
+                            'grid' => $subcard->getGrid(),
+                        ];
+                    })->toArray(),
+                ];
+            })->toArray();
+
+            // Call Python PDF service
+            $pdfUrls = $this->callPDFService(
+                $event,
+                $cardsData,
+                $layout,
+                $layoutModel
+            );
+
+            return response()->json([
+                'message' => 'PDFs generated successfully',
+                'event' => [
+                    'id' => $event->id,
+                    'name' => $event->name,
+                ],
+                'pdfs' => [
+                    'total' => count($pdfUrls),
+                    'urls' => $pdfUrls,
+                ],
+            ], 201);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Failed to generate PDFs',
+                'error' => $e->getMessage(),
+            ], 400);
+        }
+    }
+
+    /**
+     * Call Python PDF generation service
+     */
+    private function callPDFService(
+        Event $event,
+        array $cardsData,
+        string $layout,
+        ?CardLayout $layoutModel
+    ): array {
+        $generatorUrl = config('services.generator.url', 'http://generator:8000');
+        $apiKey = config('services.generator.api_key', env('GENERATOR_API_KEY', 'dev-api-key'));
+
+        $payload = [
+            'event_id' => $event->id,
+            'event_name' => $event->name,
+            'event_date' => $event->event_date?->format('Y-m-d'),
+            'event_location' => $event->location,
+            'cards' => $cardsData,
+            'layout' => $layout,
+        ];
+
+        // Add layout config if available
+        if ($layoutModel) {
+            $payload['layout_config'] = $layoutModel->getMergedConfig();
+        }
+
+        $response = Http::withHeaders([
+            'X-API-KEY' => $apiKey,
+        ])->timeout(600) // 10 minute timeout for large PDF batches
+        ->post("{$generatorUrl}/generator/pdf", $payload);
+
+        if (!$response->successful()) {
+            throw new \Exception("PDF service error ({$response->status()}): " . $response->body());
+        }
+
+        $data = $response->json();
+
+        if ($data['status'] !== 'ok') {
+            throw new \Exception("PDF service returned error: {$data['status']}");
+        }
+
+        return $data['pdf_urls'] ?? [];
     }
 
     /**

@@ -3,13 +3,14 @@ PDF generation for bingo tickets with custom layout support
 """
 import logging
 import os
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
-from app.models import PDFRequest, PDFResponse
+from app.models import PDFRequest, PDFResponse, SubcardData
 import qrcode
 from io import BytesIO
-from reportlab.lib.pagesizes import A4, A5
+from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
@@ -28,6 +29,7 @@ class PDFGenerator:
     - Custom background layout support
     - Event information
     - Professional layout for printing
+    - Uses actual subcard data from database
     """
 
     # Column definitions for bingo: B, I, N, G, O
@@ -39,39 +41,41 @@ class PDFGenerator:
 
     async def generate(self, request: PDFRequest) -> PDFResponse:
         """
-        Generate PDF files for tickets.
+        Generate PDF files for tickets with real card data.
 
         Args:
-            request: PDFRequest with card data and event info
+            request: PDFRequest with card data, event info, and layout config
 
         Returns:
             PDFResponse with URLs to generated PDFs
         """
         logger.info(
-            f"📄 Generating PDFs for {len(request.card_ids)} tickets "
+            f"📄 Generating PDFs for {len(request.cards)} tickets "
             f"(event: {request.event_name})"
         )
 
         pdf_urls = []
 
         try:
-            for idx, card_id in enumerate(request.card_ids):
-                # Generate PDF file
+            for idx, card_data in enumerate(request.cards):
+                # Generate PDF file with actual card data
                 pdf_path = await self._generate_single_pdf(
-                    card_id=card_id,
+                    card_id=card_data.card_id,
+                    card_index=card_data.card_index,
+                    subcards=card_data.subcards,
                     event_id=request.event_id,
                     event_name=request.event_name,
                     event_date=request.event_date,
                     event_location=request.event_location,
-                    card_index=idx + 1,
                     layout=request.layout,
+                    layout_config=request.layout_config,
                 )
 
                 if pdf_path:
                     pdf_urls.append(str(pdf_path))
 
                 if (idx + 1) % 100 == 0:
-                    logger.info(f"✅ Generated {idx + 1}/{len(request.card_ids)} PDFs")
+                    logger.info(f"✅ Generated {idx + 1}/{len(request.cards)} PDFs")
 
             logger.info(f"✅ PDF generation complete: {len(pdf_urls)} files created")
 
@@ -88,27 +92,31 @@ class PDFGenerator:
     async def _generate_single_pdf(
         self,
         card_id: str,
+        card_index: int,
+        subcards: List[SubcardData],
         event_id: str,
         event_name: str,
         event_date: Optional[str],
         event_location: Optional[str],
-        card_index: int,
-        layout: str = "default"
-    ) -> Path:
+        layout: str = "default",
+        layout_config=None
+    ) -> Optional[Path]:
         """
         Generate a single PDF for a ticket.
 
         Args:
             card_id: Card UUID
+            card_index: Card sequential number
+            subcards: List of SubcardData with grids
             event_id: Event UUID
             event_name: Event name
             event_date: Event date
             event_location: Event location
-            card_index: Card sequential number
             layout: Layout template name
+            layout_config: Custom layout configuration
 
         Returns:
-            Path to generated PDF file
+            Path to generated PDF file or None if failed
         """
         try:
             filename = f"{card_index:05d}_{card_id[:8]}.pdf"
@@ -118,12 +126,14 @@ class PDFGenerator:
             self._create_pdf_with_reportlab(
                 filepath=filepath,
                 card_id=card_id,
+                card_index=card_index,
+                subcards=subcards,
                 event_id=event_id,
                 event_name=event_name,
                 event_date=event_date,
                 event_location=event_location,
-                card_index=card_index,
                 layout=layout,
+                layout_config=layout_config,
             )
 
             logger.debug(f"📄 PDF created: {filepath}")
@@ -137,15 +147,17 @@ class PDFGenerator:
         self,
         filepath: Path,
         card_id: str,
+        card_index: int,
+        subcards: List[SubcardData],
         event_id: str,
         event_name: str,
         event_date: Optional[str],
         event_location: Optional[str],
-        card_index: int,
         layout: str,
+        layout_config=None,
     ) -> None:
         """
-        Create PDF using ReportLab with custom layout.
+        Create PDF using ReportLab with custom layout and actual card data.
         """
         from reportlab.lib.units import mm
 
@@ -158,43 +170,50 @@ class PDFGenerator:
         margin_left = 10 * mm
         margin_bottom = 10 * mm
 
-        # Get layout configuration
-        layout_config = self._get_layout_config(layout)
+        # Get layout configuration (use provided or get default)
+        if layout_config:
+            config = self._merge_layout_config(layout_config)
+        else:
+            config = self._get_layout_config(layout)
 
         # Draw background if available
-        self._draw_background(c, filepath, layout_config, width, height)
+        self._draw_background(c, filepath, config, width, height)
 
         # Header section
         header_y = height - margin_top
-        self._draw_header(c, event_name, event_date, event_location, header_y, layout_config)
+        self._draw_header(c, event_name, event_date, event_location, header_y, config)
 
         # Card info section
         info_y = header_y - 30 * mm
-        self._draw_card_info(c, card_id, card_index, info_y, layout_config)
+        self._draw_card_info(c, card_id, card_index, info_y, config)
 
         # QR Code
         qr_y = info_y - 35 * mm
-        self._draw_qr_code(c, card_id, event_id, qr_y, layout_config)
+        self._draw_qr_code(c, card_id, event_id, qr_y, config)
 
-        # 5 Subcards (5 rounds)
+        # 5 Subcards (5 rounds) - use actual subcard data
         subcard_y = qr_y - 10 * mm
         subcard_height = 35 * mm
         subcard_width = (width - margin_left - 10 * mm) / 3
 
-        for round_num in range(1, 6):
-            col = (round_num - 1) % 3
-            row = (round_num - 1) // 3
+        for idx, subcard in enumerate(subcards):
+            if idx >= 5:  # Maximum 5 subcards per page
+                break
+
+            round_num = subcard.round
+            col = (idx) % 3
+            row = (idx) // 3
 
             x = margin_left + (col * (subcard_width + 3 * mm))
             y = subcard_y - (row * (subcard_height + 5 * mm))
 
-            self._draw_subcard(
-                c, round_num, x, y, subcard_width, subcard_height, layout_config
+            self._draw_subcard_with_data(
+                c, round_num, x, y, subcard_width, subcard_height, subcard.grid, config
             )
 
         # Footer
         footer_y = margin_bottom
-        self._draw_footer(c, layout_config, footer_y)
+        self._draw_footer(c, config, footer_y)
 
         c.save()
 
@@ -246,7 +265,7 @@ class PDFGenerator:
         """Draw QR code."""
         from reportlab.lib.units import mm
 
-        qr_data = f'{{"event_id": "{event_id}", "card_id": "{card_id}"}}'
+        qr_data = json.dumps({"event_id": event_id, "card_id": card_id})
         qr = qrcode.QRCode(
             version=1,
             error_correction=qrcode.constants.ERROR_CORRECT_L,
@@ -264,7 +283,7 @@ class PDFGenerator:
         # Draw QR code (30x30mm)
         c.drawImage(ImageReader(img_bytes), 170 * mm, y - 30 * mm, width=30 * mm, height=30 * mm)
 
-    def _draw_subcard(
+    def _draw_subcard_with_data(
         self,
         c: canvas.Canvas,
         round_num: int,
@@ -272,9 +291,10 @@ class PDFGenerator:
         y: float,
         width: float,
         height: float,
+        grid: List[List[str]],
         config: Dict,
     ) -> None:
-        """Draw a single 5x5 subcard."""
+        """Draw a single 5x5 subcard with actual data."""
         from reportlab.lib.units import mm
 
         # Title
@@ -286,9 +306,6 @@ class PDFGenerator:
         cell_width = (width - 4 * mm) / 5
         cell_height = (height - 8 * mm) / 5
         grid_y = y - 5 * mm
-
-        # Example grid (in production, get from database)
-        grid = self._generate_example_grid(round_num)
 
         c.setFont("Helvetica", 8)
         c.setFillColor(colors.black)
@@ -392,59 +409,22 @@ class PDFGenerator:
 
         return layouts.get(layout, layouts['default'])
 
-    def _generate_example_grid(self, round_num: int) -> List[List[str]]:
+    def _merge_layout_config(self, layout_config) -> Dict:
         """
-        Generate example 5x5 bingo grid.
-
-        In production, this will fetch from database based on subcard hash.
-        """
-        import random
-
-        grid = []
-        ranges = [
-            (1, 15),    # B
-            (16, 30),   # I
-            (31, 45),   # N
-            (46, 60),   # G
-            (61, 75),   # O
-        ]
-
-        for row in range(5):
-            grid_row = []
-            for col in range(5):
-                if row == 2 and col == 2:
-                    grid_row.append("FREE")
-                else:
-                    min_val, max_val = ranges[col]
-                    grid_row.append(str(random.randint(min_val, max_val)))
-            grid.append(grid_row)
-
-        return grid
-
-    def _generate_qr_code(self, data: str) -> BytesIO:
-        """
-        Generate QR code image.
+        Merge custom layout config with defaults.
 
         Args:
-            data: Data to encode (JSON string with event_id and card_id)
+            layout_config: LayoutConfig object from request
 
         Returns:
-            BytesIO object with QR code image
+            Merged configuration dictionary
         """
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=4,
-        )
-        qr.add_data(data)
-        qr.make(fit=True)
+        defaults = self._get_layout_config('default')
 
-        img = qr.make_image(fill_color="black", back_color="white")
+        # Convert Pydantic model to dict if needed
+        if hasattr(layout_config, 'dict'):
+            custom = layout_config.dict(exclude_none=True)
+        else:
+            custom = layout_config
 
-        # Convert to BytesIO
-        img_io = BytesIO()
-        img.save(img_io, format='PNG')
-        img_io.seek(0)
-
-        return img_io
+        return {**defaults, **custom}

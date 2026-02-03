@@ -48,19 +48,42 @@ class GenerateResponse(BaseModel):
         }
 
 
+class LayoutConfig(BaseModel):
+    """Layout configuration for PDF generation"""
+    header_color: str = Field(default="#3498DB", description="Header color in hex")
+    free_space_color: str = Field(default="#FFD700", description="FREE space color in hex")
+    bg_color: str = Field(default="#FFFFFF", description="Background color in hex")
+    text_color: str = Field(default="#000000", description="Text color in hex")
+    footer_text: str = Field(default="Ação entre Amigos - Sistema de Bingo Híbrido", description="Footer text")
+    background_file: Optional[str] = Field(None, description="Path to background image file")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "header_color": "#3498DB",
+                "free_space_color": "#FFD700",
+                "bg_color": "#FFFFFF",
+                "text_color": "#000000",
+                "footer_text": "Ação entre Amigos - Sistema de Bingo Híbrido",
+                "background_file": None
+            }
+        }
+
+
 class PDFRequest(BaseModel):
     """Request model for PDF generation"""
     event_id: str = Field(..., description="UUID of the event")
     event_name: str = Field(..., description="Name of the event")
     event_date: Optional[str] = Field(None, description="Event date")
     event_location: Optional[str] = Field(None, description="Event location")
-    card_ids: List[str] = Field(..., description="List of card IDs to generate PDFs for")
+    cards: List[CardData] = Field(..., description="List of cards with subcard data to generate PDFs for")
     layout: str = Field(default="default", description="PDF layout template")
+    layout_config: Optional[LayoutConfig] = Field(None, description="Custom layout configuration")
 
-    @validator('card_ids')
-    def validate_card_ids(cls, v):
+    @validator('cards')
+    def validate_cards(cls, v):
         if len(v) == 0:
-            raise ValueError("At least one card ID must be provided")
+            raise ValueError("At least one card must be provided")
         if len(v) > 10000:
             raise ValueError("Maximum 10000 cards per request")
         return v
@@ -72,8 +95,9 @@ class PDFRequest(BaseModel):
                 "event_name": "Bingo Beneficente",
                 "event_date": "2024-05-10",
                 "event_location": "São Paulo, SP",
-                "card_ids": ["card-001", "card-002"],
-                "layout": "default"
+                "cards": [],
+                "layout": "default",
+                "layout_config": None
             }
         }
 

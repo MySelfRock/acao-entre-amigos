@@ -4,6 +4,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\EventController;
+use App\Http\Controllers\CardController;
+use App\Http\Controllers\CardLayoutController;
 
 /*
 |--------------------------------------------------------------------------
@@ -51,10 +53,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('layouts/{layout}/upload-background', [CardLayoutController::class, 'uploadBackground']);
     Route::put('layouts/{layout}/config', [CardLayoutController::class, 'updateConfig']);
 
-    // Cards & Generation (Etapa 7)
+    // Cards & Generation (Etapa 7-8)
     Route::apiResource('events.cards', CardController::class)->only('index', 'show');
     Route::post('events/{event}/generate-cards', [CardController::class, 'generate']);
     Route::get('events/{event}/generate-status', [CardController::class, 'generateStatus']);
+    Route::post('events/{event}/generate-pdfs', [CardController::class, 'generatePDFs']);
     Route::get('cards/qr/{qr_code}', [CardController::class, 'downloadByQR']);
 
     // TODO: Additional routes will be added in subsequent etapas
