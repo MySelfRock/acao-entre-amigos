@@ -1,28 +1,37 @@
 """
-PDF generation for bingo tickets
+PDF generation for bingo tickets with custom layout support
 """
 import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Optional
 from app.models import PDFRequest, PDFResponse
 import qrcode
 from io import BytesIO
+from reportlab.lib.pagesizes import A4, A5
+from reportlab.lib import colors
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+from PIL import Image as PILImage
 
 logger = logging.getLogger(__name__)
 
 
 class PDFGenerator:
     """
-    Generate printable PDF files for bingo tickets.
+    Generate printable PDF files for bingo tickets with ReportLab.
 
     Features:
     - 5 subcards per page (one per round)
     - QR code for verification
+    - Custom background layout support
     - Event information
-    - Clear layout for printing
+    - Professional layout for printing
     """
+
+    # Column definitions for bingo: B, I, N, G, O
+    COLUMNS = ['B', 'I', 'N', 'G', 'O']
 
     def __init__(self):
         self.output_dir = Path(os.getenv("PDF_OUTPUT_DIR", "./output"))
@@ -48,13 +57,14 @@ class PDFGenerator:
         try:
             for idx, card_id in enumerate(request.card_ids):
                 # Generate PDF file
-                pdf_path = self._generate_single_pdf(
+                pdf_path = await self._generate_single_pdf(
                     card_id=card_id,
                     event_id=request.event_id,
                     event_name=request.event_name,
                     event_date=request.event_date,
                     event_location=request.event_location,
-                    card_index=idx + 1
+                    card_index=idx + 1,
+                    layout=request.layout,
                 )
 
                 if pdf_path:
@@ -75,14 +85,15 @@ class PDFGenerator:
             logger.error(f"❌ PDF generation failed: {str(e)}")
             raise
 
-    def _generate_single_pdf(
+    async def _generate_single_pdf(
         self,
         card_id: str,
         event_id: str,
         event_name: str,
-        event_date: str,
-        event_location: str,
-        card_index: int
+        event_date: Optional[str],
+        event_location: Optional[str],
+        card_index: int,
+        layout: str = "default"
     ) -> Path:
         """
         Generate a single PDF for a ticket.
@@ -94,24 +105,26 @@ class PDFGenerator:
             event_date: Event date
             event_location: Event location
             card_index: Card sequential number
+            layout: Layout template name
 
         Returns:
             Path to generated PDF file
         """
         try:
-            # For now, create a placeholder file
-            # Full PDF generation with ReportLab will be implemented next
             filename = f"{card_index:05d}_{card_id[:8]}.pdf"
             filepath = self.output_dir / filename
 
-            # Create placeholder PDF content
-            pdf_content = self._create_placeholder_pdf(
-                card_id, event_id, event_name, event_date, event_location, card_index
+            # Create PDF with ReportLab
+            self._create_pdf_with_reportlab(
+                filepath=filepath,
+                card_id=card_id,
+                event_id=event_id,
+                event_name=event_name,
+                event_date=event_date,
+                event_location=event_location,
+                card_index=card_index,
+                layout=layout,
             )
-
-            # Write file
-            with open(filepath, 'w') as f:
-                f.write(pdf_content)
 
             logger.debug(f"📄 PDF created: {filepath}")
             return filepath
@@ -120,47 +133,293 @@ class PDFGenerator:
             logger.error(f"❌ Failed to generate PDF for card {card_id}: {str(e)}")
             return None
 
-    def _create_placeholder_pdf(
+    def _create_pdf_with_reportlab(
         self,
+        filepath: Path,
         card_id: str,
         event_id: str,
         event_name: str,
+        event_date: Optional[str],
+        event_location: Optional[str],
+        card_index: int,
+        layout: str,
+    ) -> None:
+        """
+        Create PDF using ReportLab with custom layout.
+        """
+        from reportlab.lib.units import mm
+
+        # Create canvas
+        c = canvas.Canvas(str(filepath), pagesize=A4)
+        width, height = A4
+
+        # Margins
+        margin_top = 15 * mm
+        margin_left = 10 * mm
+        margin_bottom = 10 * mm
+
+        # Get layout configuration
+        layout_config = self._get_layout_config(layout)
+
+        # Draw background if available
+        self._draw_background(c, filepath, layout_config, width, height)
+
+        # Header section
+        header_y = height - margin_top
+        self._draw_header(c, event_name, event_date, event_location, header_y, layout_config)
+
+        # Card info section
+        info_y = header_y - 30 * mm
+        self._draw_card_info(c, card_id, card_index, info_y, layout_config)
+
+        # QR Code
+        qr_y = info_y - 35 * mm
+        self._draw_qr_code(c, card_id, event_id, qr_y, layout_config)
+
+        # 5 Subcards (5 rounds)
+        subcard_y = qr_y - 10 * mm
+        subcard_height = 35 * mm
+        subcard_width = (width - margin_left - 10 * mm) / 3
+
+        for round_num in range(1, 6):
+            col = (round_num - 1) % 3
+            row = (round_num - 1) // 3
+
+            x = margin_left + (col * (subcard_width + 3 * mm))
+            y = subcard_y - (row * (subcard_height + 5 * mm))
+
+            self._draw_subcard(
+                c, round_num, x, y, subcard_width, subcard_height, layout_config
+            )
+
+        # Footer
+        footer_y = margin_bottom
+        self._draw_footer(c, layout_config, footer_y)
+
+        c.save()
+
+    def _draw_header(
+        self,
+        c: canvas.Canvas,
+        event_name: str,
         event_date: str,
         event_location: str,
-        card_index: int
-    ) -> str:
-        """
-        Create placeholder PDF content (will be replaced with ReportLab).
+        y: float,
+        config: Dict,
+    ) -> None:
+        """Draw header section with event information."""
+        from reportlab.lib.units import mm
 
-        Args:
-            card_id: Card UUID
-            event_id: Event UUID
-            event_name: Event name
-            event_date: Event date
-            event_location: Event location
-            card_index: Card sequential number
+        c.setFont("Helvetica-Bold", 16)
+        c.setFillColor(colors.HexColor(config.get('header_color', '#3498DB')))
+        c.drawString(20 * mm, y, event_name)
 
-        Returns:
-            PDF content as string
-        """
-        # Placeholder - will implement full ReportLab integration
-        return f"""
-        PDF PLACEHOLDER
-        ================
-        Event: {event_name}
-        Date: {event_date}
-        Location: {event_location}
-        Card Number: {card_index}
-        Card ID: {card_id}
-        Event ID: {event_id}
-        Generated: {datetime.now().isoformat()}
+        c.setFont("Helvetica", 10)
+        c.setFillColor(colors.black)
+        info_text = f"Data: {event_date or 'N/A'} | Local: {event_location or 'N/A'}"
+        c.drawString(20 * mm, y - 7 * mm, info_text)
 
-        [LAYOUT PLACEHOLDER]
-        - Header with event info
-        - 5x5 Subcards (Rounds 1-5)
-        - QR Code
-        - Footer with rules
+    def _draw_card_info(
+        self,
+        c: canvas.Canvas,
+        card_id: str,
+        card_index: int,
+        y: float,
+        config: Dict,
+    ) -> None:
+        """Draw card identification."""
+        from reportlab.lib.units import mm
+
+        c.setFont("Helvetica-Bold", 12)
+        c.setFillColor(colors.black)
+        c.drawString(20 * mm, y, f"Cartela Nº: {card_index:05d}")
+        c.drawString(80 * mm, y, f"ID: {card_id[:8].upper()}")
+
+    def _draw_qr_code(
+        self,
+        c: canvas.Canvas,
+        card_id: str,
+        event_id: str,
+        y: float,
+        config: Dict,
+    ) -> None:
+        """Draw QR code."""
+        from reportlab.lib.units import mm
+
+        qr_data = f'{{"event_id": "{event_id}", "card_id": "{card_id}"}}'
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=8,
+            border=2,
+        )
+        qr.add_data(qr_data)
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+        img_bytes = BytesIO()
+        img.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+
+        # Draw QR code (30x30mm)
+        c.drawImage(ImageReader(img_bytes), 170 * mm, y - 30 * mm, width=30 * mm, height=30 * mm)
+
+    def _draw_subcard(
+        self,
+        c: canvas.Canvas,
+        round_num: int,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        config: Dict,
+    ) -> None:
+        """Draw a single 5x5 subcard."""
+        from reportlab.lib.units import mm
+
+        # Title
+        c.setFont("Helvetica-Bold", 11)
+        c.setFillColor(colors.HexColor(config.get('header_color', '#3498DB')))
+        c.drawString(x + 2 * mm, y, f"Rodada {round_num}")
+
+        # Grid
+        cell_width = (width - 4 * mm) / 5
+        cell_height = (height - 8 * mm) / 5
+        grid_y = y - 5 * mm
+
+        # Example grid (in production, get from database)
+        grid = self._generate_example_grid(round_num)
+
+        c.setFont("Helvetica", 8)
+        c.setFillColor(colors.black)
+
+        for row_idx, row in enumerate(grid):
+            for col_idx, value in enumerate(row):
+                cell_x = x + 2 * mm + (col_idx * cell_width)
+                cell_y = grid_y - (row_idx * cell_height)
+
+                # Draw cell border
+                c.rect(cell_x, cell_y - cell_height, cell_width, cell_height, stroke=1, fill=0)
+
+                # Fill FREE square with special color
+                if value == "FREE":
+                    c.setFillColor(colors.HexColor(config.get('free_space_color', '#FFD700')))
+                    c.rect(cell_x, cell_y - cell_height, cell_width, cell_height, stroke=1, fill=1)
+                    c.setFillColor(colors.black)
+
+                # Draw number centered in cell
+                text_x = cell_x + cell_width / 2
+                text_y = cell_y - cell_height / 2 - 1.5 * mm
+
+                if value != "FREE":
+                    c.drawCentredString(text_x, text_y, str(value))
+                else:
+                    c.drawCentredString(text_x, text_y, "FREE")
+
+    def _draw_footer(
+        self,
+        c: canvas.Canvas,
+        config: Dict,
+        y: float,
+    ) -> None:
+        """Draw footer section."""
+        from reportlab.lib.units import mm
+
+        c.setFont("Helvetica", 8)
+        c.setFillColor(colors.grey)
+
+        footer_text = config.get('footer_text', 'Ação entre Amigos - Sistema de Bingo Híbrido')
+        c.drawString(20 * mm, y, footer_text)
+
+        # Page number and timestamp
+        c.drawString(170 * mm, y, f"Gerado: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+
+    def _draw_background(
+        self,
+        c: canvas.Canvas,
+        filepath: Path,
+        config: Dict,
+        width: float,
+        height: float,
+    ) -> None:
+        """Draw background image if available."""
+        background_file = config.get('background_file')
+
+        if not background_file or not os.path.exists(background_file):
+            return
+
+        try:
+            c.drawImage(
+                ImageReader(background_file),
+                0, 0,
+                width=width,
+                height=height,
+                preserveAspectRatio=True,
+                opacity=0.1,  # Subtle background
+            )
+        except Exception as e:
+            logger.warning(f"⚠️  Could not draw background: {str(e)}")
+
+    def _get_layout_config(self, layout: str) -> Dict:
         """
+        Get layout configuration by name.
+
+        In production, this will fetch from database.
+        """
+        layouts = {
+            'default': {
+                'bg_color': '#FFFFFF',
+                'text_color': '#000000',
+                'header_color': '#3498DB',
+                'free_space_color': '#FFD700',
+                'footer_text': 'Ação entre Amigos - Sistema de Bingo Híbrido',
+            },
+            'dark': {
+                'bg_color': '#1A1A1A',
+                'text_color': '#FFFFFF',
+                'header_color': '#E74C3C',
+                'free_space_color': '#F39C12',
+                'footer_text': 'Ação entre Amigos',
+            },
+            'pastel': {
+                'bg_color': '#FFF9E6',
+                'text_color': '#333333',
+                'header_color': '#9B59B6',
+                'free_space_color': '#F1C40F',
+                'footer_text': 'Bingo - Edição Especial',
+            },
+        }
+
+        return layouts.get(layout, layouts['default'])
+
+    def _generate_example_grid(self, round_num: int) -> List[List[str]]:
+        """
+        Generate example 5x5 bingo grid.
+
+        In production, this will fetch from database based on subcard hash.
+        """
+        import random
+
+        grid = []
+        ranges = [
+            (1, 15),    # B
+            (16, 30),   # I
+            (31, 45),   # N
+            (46, 60),   # G
+            (61, 75),   # O
+        ]
+
+        for row in range(5):
+            grid_row = []
+            for col in range(5):
+                if row == 2 and col == 2:
+                    grid_row.append("FREE")
+                else:
+                    min_val, max_val = ranges[col]
+                    grid_row.append(str(random.randint(min_val, max_val)))
+            grid.append(grid_row)
+
+        return grid
 
     def _generate_qr_code(self, data: str) -> BytesIO:
         """

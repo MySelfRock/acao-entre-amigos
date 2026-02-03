@@ -45,9 +45,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('events/{event}/start', [EventController::class, 'start']);
     Route::post('events/{event}/finish', [EventController::class, 'finish']);
 
+    // Card Layouts (Etapa 7-8: PDF Layouts)
+    Route::apiResource('layouts', CardLayoutController::class);
+    Route::post('layouts/{layout}/set-default', [CardLayoutController::class, 'setDefault']);
+    Route::post('layouts/{layout}/upload-background', [CardLayoutController::class, 'uploadBackground']);
+    Route::put('layouts/{layout}/config', [CardLayoutController::class, 'updateConfig']);
+
+    // Cards & Generation (Etapa 7)
+    Route::apiResource('events.cards', CardController::class)->only('index', 'show');
+    Route::post('events/{event}/generate-cards', [CardController::class, 'generate']);
+    Route::get('events/{event}/generate-status', [CardController::class, 'generateStatus']);
+    Route::get('cards/qr/{qr_code}', [CardController::class, 'downloadByQR']);
+
     // TODO: Additional routes will be added in subsequent etapas
-    // Route::post('events/{event}/generate-cards', 'CardController@generate');
-    // Route::get('events/{event}/cards', 'CardController@index');
     // Route::post('events/{event}/draw', 'DrawController@draw');
     // Route::get('events/{event}/draws', 'DrawController@index');
     // Route::post('bingo/claim', 'BingoController@claim');
