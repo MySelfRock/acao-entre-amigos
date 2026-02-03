@@ -16,9 +16,9 @@ Sistema de bingo híbrido (digital + presencial) com suporte a 2.000+ cartelas, 
 
 ---
 
-## 🔵 FASE 2: INFRAESTRUTURA E SETUP BASE
+## ✅ FASE 2: INFRAESTRUTURA E SETUP BASE (Concluída)
 
-### Etapa 4: Setup do Código Base (Laravel + Python)
+### ✅ Etapa 4: Setup do Código Base (Laravel + Python)
 
 #### 4.1 Estrutura de Repositórios
 ```
@@ -66,9 +66,9 @@ bingo-system/
 
 ---
 
-## 🔵 FASE 3: MÓDULOS CORE
+## ✅ FASE 3: MÓDULOS CORE (Concluída)
 
-### Etapa 5: Autenticação e Perfis de Usuário
+### ✅ Etapa 5: Autenticação e Perfis de Usuário
 
 #### 5.1 Funcionalidades
 - Sistema de login seguro (JWT + Sanctum Laravel)
@@ -90,7 +90,7 @@ bingo-system/
 
 ---
 
-### Etapa 6: Módulo de Criação de Evento
+### ✅ Etapa 6: Módulo de Criação de Evento
 
 #### 6.1 Campos do Evento
 - Nome do evento
@@ -122,7 +122,7 @@ bingo-system/
 
 ---
 
-### Etapa 7: Geração de Cartelas (Python + Laravel)
+### ✅ Etapa 7: Geração de Cartelas (Python + Laravel)
 
 #### 7.1 Algoritmo Python
 ```python
@@ -165,7 +165,7 @@ for cada_cartela in range(total_cards):
 
 ---
 
-### Etapa 8: Geração de PDFs
+### ✅ Etapa 8: Geração de PDFs com Layouts Customizados
 
 #### 8.1 Layout PDF (A4)
 ```
@@ -205,7 +205,7 @@ for cada_cartela in range(total_cards):
 
 ## 🔵 FASE 4: SORTEIO E VALIDAÇÃO
 
-### Etapa 9: Sorteio ao Vivo (WebSocket)
+### ✅ Etapa 9: Sorteio ao Vivo com WebSocket
 
 #### 9.1 Interface do Operador
 - Botão "Sortear Número"
@@ -231,10 +231,45 @@ for cada_cartela in range(total_cards):
 ```javascript
 // Laravel Broadcasting
 broadcast(new NumberDrawn($event, $number, $order))
-// Recebido por: app.bingo.{event_id}
+// Recebido por: event.{event_id}.draw
+broadcast(new BingoClaimed($event, $subcard_id, $user_id))
+// Recebido por: event.{event_id}.bingo
 ```
 
-**Saída esperada:** Sorteio em tempo real, sincronizado
+#### 9.5 Implementação Completa ✅
+
+**DrawService:**
+- `startDraw()` - Inicia sorteio e transiciona evento
+- `drawNumber()` - Sorteia número aleatório sem repetição
+- `checkForBingoClaims()` - Valida autocarticamente bingos ao sortear
+- `checkSubcardForBingo()` - Detecta cartela completa
+- `claimBingo()` - Registra reivindicação de bingo digital
+- `finishDraw()` - Encerra sorteio
+- `getDrawStatus()` - Status atual da rodada
+- `getResults()` - Resultados finais
+
+**DrawController Endpoints:**
+- `POST /api/events/{id}/draw/start` - Iniciar sorteio
+- `POST /api/events/{id}/draw/next` - Sortear próximo número
+- `GET /api/events/{id}/draw/status` - Status da rodada
+- `GET /api/events/{id}/draw/numbers` - Números sorteados
+- `GET /api/events/{id}/draw/winner` - Vencedor da rodada
+- `POST /api/events/{id}/draw/claim` - Reivindicar bingo
+- `GET /api/events/{id}/draw/claims` - Listar reivindicações
+- `POST /api/events/{id}/draw/finish` - Encerrar sorteio
+- `GET /api/events/{id}/draw/results` - Resultados finais
+
+**Broadcast Events:**
+- `NumberDrawn` - Emitido quando número é sorteado (canal: `event.{event_id}.draw`)
+- `BingoClaimed` - Emitido quando bingo é reivindicado (canal: `event.{event_id}.bingo`)
+
+**Suporte WebSocket:**
+- Redis broadcaster (padrão produção)
+- Pusher (serviço gerenciado)
+- Log driver (desenvolvimento)
+- Configuração em `config/broadcasting.php`
+
+**Saída esperada:** ✅ Sorteio em tempo real com validação automática de bingos
 
 ---
 
