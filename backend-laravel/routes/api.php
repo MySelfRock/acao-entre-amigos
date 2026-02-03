@@ -6,6 +6,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\EventController;
 use App\Http\Controllers\CardController;
 use App\Http\Controllers\CardLayoutController;
+use App\Http\Controllers\DrawController;
 
 /*
 |--------------------------------------------------------------------------
@@ -59,6 +60,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('events/{event}/generate-status', [CardController::class, 'generateStatus']);
     Route::post('events/{event}/generate-pdfs', [CardController::class, 'generatePDFs']);
     Route::get('cards/qr/{qr_code}', [CardController::class, 'downloadByQR']);
+
+    // Draw & Bingo (Etapa 9: Live Draw with WebSocket)
+    Route::prefix('events/{event}/draw')->group(function () {
+        Route::post('start', [DrawController::class, 'start']);
+        Route::post('next', [DrawController::class, 'drawNext']);
+        Route::get('status', [DrawController::class, 'status']);
+        Route::get('numbers', [DrawController::class, 'getNumbers']);
+        Route::get('winner', [DrawController::class, 'getWinner']);
+        Route::post('claim', [DrawController::class, 'claimBingo']);
+        Route::get('claims', [DrawController::class, 'getClaims']);
+        Route::post('finish', [DrawController::class, 'finish']);
+        Route::get('results', [DrawController::class, 'getResults']);
+    });
 
     // TODO: Additional routes will be added in subsequent etapas
     // Route::post('events/{event}/draw', 'DrawController@draw');
