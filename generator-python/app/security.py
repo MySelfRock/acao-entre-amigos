@@ -156,3 +156,22 @@ def validate_seed_format(seed: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def generate_qr_code_data(event_id: str, card_id: str) -> str:
+    """
+    Generate QR code data string for card verification.
+
+    Args:
+        event_id: Event UUID
+        card_id: Card UUID
+
+    Returns:
+        JSON string with event_id and card_id
+    """
+    import json
+    data = {
+        "event_id": event_id,
+        "card_id": card_id
+    }
+    return json.dumps(data)

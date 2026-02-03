@@ -123,124 +123,85 @@ class GenerateCardsJob implements ShouldQueue
     }
 
     /**
-     * Persist cards and subcards to database
+     * Persist cards and subcards to database from generator response
      */
     private function persistCards(array $generatedData): void
     {
+        if (!isset($generatedData['cards']) || !is_array($generatedData['cards'])) {
+            throw new \Exception('Invalid generator response: missing cards array');
+        }
+
+        $cards = $generatedData['cards'];
         Log::info("💾 Persisting {$this->event->total_cards} cards to database");
 
         $cardsCreated = 0;
         $subcardsCreated = 0;
 
-        // Get generator data for all cards
-        $generatorResponse = $this->getGeneratorData();
-
-        for ($cardIndex = 0; $cardIndex < $this->event->total_cards; $cardIndex++) {
-            // Create card
-            $card = Card::create([
-                'id' => Str::uuid(),
-                'event_id' => $this->event->id,
-                'card_index' => $cardIndex + 1,
-                'qr_code' => $this->generateQRCode($cardIndex),
-            ]);
-
-            $cardsCreated++;
-
-            // Create subcards for each round
-            for ($round = 1; $round <= $this->event->total_rounds; $round++) {
-                // Get subcard data from generator (reconstruct from seed if needed)
-                $subcardData = $this->getSubcardData($cardIndex, $round);
-
-                $subcard = Subcard::create([
-                    'id' => Str::uuid(),
-                    'card_id' => $card->id,
+        foreach ($cards as $cardData) {
+            try {
+                // Create card with data from generator
+                $card = Card::create([
+                    'id' => $cardData['card_id'] ?? Str::uuid(),
                     'event_id' => $this->event->id,
-                    'round_number' => $round,
-                    'hash' => $subcardData['hash'],
+                    'card_index' => $cardData['card_index'] ?? ($cardsCreated + 1),
+                    'qr_code' => $cardData['qr_code'] ?? '',
                 ]);
 
-                $subcardsCreated++;
+                $cardsCreated++;
 
-                // Store grid numbers
-                foreach ($subcardData['grid'] as $row => $cols) {
-                    foreach ($cols as $col => $value) {
-                        SubcardNumber::create([
-                            'subcard_id' => $subcard->id,
-                            'row' => $row,
-                            'col' => $col,
-                            'value' => $value,
-                        ]);
+                // Create subcards from the provided subcard data
+                if (!isset($cardData['subcards']) || !is_array($cardData['subcards'])) {
+                    Log::warning("Card {$card->id} has no subcards in generator response");
+                    continue;
+                }
+
+                foreach ($cardData['subcards'] as $subcardData) {
+                    if (!isset($subcardData['round']) || !isset($subcardData['hash']) || !isset($subcardData['grid'])) {
+                        Log::warning("Skipping invalid subcard data for card {$card->id}");
+                        continue;
+                    }
+
+                    $subcard = Subcard::create([
+                        'id' => Str::uuid(),
+                        'card_id' => $card->id,
+                        'event_id' => $this->event->id,
+                        'round_number' => (int)$subcardData['round'],
+                        'hash' => $subcardData['hash'],
+                    ]);
+
+                    $subcardsCreated++;
+
+                    // Store grid numbers from the provided grid
+                    $grid = $subcardData['grid'];
+                    foreach ($grid as $rowIdx => $row) {
+                        foreach ($row as $colIdx => $value) {
+                            SubcardNumber::create([
+                                'id' => Str::uuid(),
+                                'subcard_id' => $subcard->id,
+                                'number' => $value === 'FREE' ? 0 : (int)$value,
+                                'row' => $rowIdx,
+                                'column' => $colIdx,
+                                'marked' => $value === 'FREE', // FREE is always marked
+                            ]);
+                        }
                     }
                 }
 
-                if ($round % 100 === 0 && $cardIndex % 10 === 0) {
-                    Log::debug("Progress: Card {$cardIndex}/{$this->event->total_cards}, Round {$round}/{$this->event->total_rounds}");
+                if ($cardsCreated % 100 === 0) {
+                    Log::info("Progress: {$cardsCreated}/{$this->event->total_cards} cards persisted");
                 }
-            }
 
-            if (($cardIndex + 1) % 100 === 0) {
-                Log::info("Progress: {$cardIndex + 1}/{$this->event->total_cards} cards created");
+            } catch (\Exception $e) {
+                Log::error("Failed to persist card: {$e->getMessage()}");
+                throw $e;
             }
         }
 
         Log::info("✅ Persisted: {$cardsCreated} cards, {$subcardsCreated} subcards");
-    }
 
-    /**
-     * Get subcard data (will be enhanced when Python returns batch data)
-     */
-    private function getSubcardData(int $cardIndex, int $round): array
-    {
-        // For now, return a placeholder
-        // In production, this will be fetched from the Python service batch response
-        return [
-            'hash' => hash('sha256', "{$this->event->id}:{$round}:{$cardIndex}"),
-            'grid' => $this->generateDefaultGrid($round),
-        ];
-    }
-
-    /**
-     * Generate default grid for demonstration
-     */
-    private function generateDefaultGrid(int $round): array
-    {
-        $grid = [];
-        $ranges = [
-            [1, 15],   // B
-            [16, 30],  // I
-            [31, 45],  // N
-            [46, 60],  // G
-            [61, 75],  // O
-        ];
-
-        for ($row = 0; $row < 5; $row++) {
-            for ($col = 0; $col < 5; $col++) {
-                if ($row === 2 && $col === 2) {
-                    $grid[$row][$col] = 'FREE';
-                } else {
-                    $min = $ranges[$col][0];
-                    $max = $ranges[$col][1];
-                    $grid[$row][$col] = (string)rand($min, $max);
-                }
-            }
+        if ($cardsCreated !== $this->event->total_cards) {
+            Log::warning("Expected {$this->event->total_cards} cards but persisted {$cardsCreated}");
         }
-
-        return $grid;
     }
 
-    /**
-     * Generate QR code identifier
-     */
-    private function generateQRCode(int $cardIndex): string
-    {
-        return $this->event->id . '-' . str_pad($cardIndex + 1, 5, '0', STR_PAD_LEFT);
-    }
-
-    /**
-     * Get generator data (placeholder for batch response)
-     */
-    private function getGeneratorData(): array
-    {
-        return [];
-    }
 }

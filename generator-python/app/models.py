@@ -30,6 +30,8 @@ class GenerateResponse(BaseModel):
     generated: int = Field(..., description="Number of subcards generated (total_cards * rounds)")
     event_id: str = Field(..., description="Event ID")
     rounds: int = Field(..., description="Number of rounds")
+    total_cards: int = Field(..., description="Number of cards generated")
+    cards: List[CardData] = Field(default_factory=list, description="Generated card data")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
     class Config:
@@ -39,6 +41,8 @@ class GenerateResponse(BaseModel):
                 "generated": 10000,
                 "event_id": "550e8400-e29b-41d4-a716-446655440000",
                 "rounds": 5,
+                "total_cards": 2000,
+                "cards": [],
                 "timestamp": "2024-02-03T12:00:00"
             }
         }

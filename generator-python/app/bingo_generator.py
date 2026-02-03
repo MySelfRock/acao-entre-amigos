@@ -46,7 +46,7 @@ class BingoGenerator:
             request: GenerateRequest with event_id, seed, total_cards, rounds
 
         Returns:
-            GenerateResponse with count of generated subcards
+            GenerateResponse with count of generated subcards and card data
         """
         logger.info(
             f"🎲 Starting generation: event_id={request.event_id}, "
@@ -59,11 +59,20 @@ class BingoGenerator:
         # Initialize hash tracking per round
         self.generated_hashes = {r: set() for r in range(1, request.rounds + 1)}
         self.subcard_data = {}
+        cards_data = []
 
         total_generated = 0
 
         # Generate for each ticket
         for card_index in range(request.total_cards):
+            from app.security import generate_qr_code_data
+            import uuid
+
+            card_id = str(uuid.uuid4())
+            qr_code = generate_qr_code_data(request.event_id, card_id)
+
+            subcards = []
+
             for round_num in range(1, request.rounds + 1):
                 # Generate subcard
                 grid = self._generate_grid(rng, card_index, round_num)
@@ -92,7 +101,25 @@ class BingoGenerator:
                     "hash": subcard_hash
                 }
 
+                # Add subcard to card data
+                from app.models import SubcardData
+                subcards.append(SubcardData(
+                    round=round_num,
+                    hash=subcard_hash,
+                    grid=grid
+                ))
+
                 total_generated += 1
+
+            # Add card to cards list
+            from app.models import CardData
+            cards_data.append(CardData(
+                card_id=card_id,
+                card_index=card_index + 1,
+                qr_code=qr_code,
+                event_id=request.event_id,
+                subcards=subcards
+            ))
 
             if (card_index + 1) % 500 == 0:
                 logger.info(f"✅ Generated {card_index + 1}/{request.total_cards} tickets")
@@ -105,7 +132,9 @@ class BingoGenerator:
         return GenerateResponse(
             generated=total_generated,
             event_id=request.event_id,
-            rounds=request.rounds
+            rounds=request.rounds,
+            total_cards=request.total_cards,
+            cards=cards_data
         )
 
     def _generate_grid(
